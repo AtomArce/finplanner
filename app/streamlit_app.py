@@ -153,6 +153,9 @@ def view_runway(s) -> None:
 def view_loan(cfg: PlannerConfig) -> None:
     st.subheader("Student Loan")
     sl = cfg.debt.student_loan
+    if sl.balance <= 0:
+        st.info("Enter your loan balance, monthly payment, and APR in the sidebar to see the payoff schedule.")
+        return
     a = amortize(sl.balance, sl.apr_percent, sl.monthly_payment)
     if a.never_amortizes:
         st.error(md_safe(f"At {money(sl.monthly_payment)}/mo the balance never amortizes "
@@ -162,7 +165,8 @@ def view_loan(cfg: PlannerConfig) -> None:
         c1.metric("Months to payoff", a.months_to_payoff)
         c2.metric("Total interest", money(a.total_interest))
         ldf = pd.DataFrame([{"month": row["month"], "balance": round(row["balance"])} for row in a.schedule])
-        st.line_chart(ldf, x="month", y="balance")
+        if not ldf.empty:
+            st.line_chart(ldf, x="month", y="balance")
     o = optimal_payment(sl.balance, sl.apr_percent,
                         cfg.assumptions.investment_return_annual_percent,
                         min_payment=sl.monthly_payment, max_affordable_payment=sl.monthly_payment + 600)
