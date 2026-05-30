@@ -39,3 +39,15 @@ def save_config(cfg: PlannerConfig, path: str | Path) -> None:
     # Restore the _meta key shape state.json uses.
     out["_meta"] = out.pop("meta", {})
     Path(path).write_text(json.dumps(out, indent=2, default=str))
+
+
+def config_from_dict(raw: dict[str, Any]) -> PlannerConfig:
+    """Parse a config from a dict (e.g. from a user-uploaded JSON file)."""
+    return _config_from_raw(raw)
+
+
+def config_to_json(cfg: PlannerConfig) -> str:
+    """Serialize cfg to the state.json wire format as a string (no file I/O)."""
+    out = cfg.model_dump(mode="json", exclude_none=False)
+    out["_meta"] = out.pop("meta", {})
+    return json.dumps(out, indent=2, default=str)

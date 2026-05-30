@@ -9,6 +9,7 @@ every view.
 
 from __future__ import annotations
 
+import json
 import sys
 from datetime import date
 from pathlib import Path
@@ -27,7 +28,7 @@ from finplanner.allocate import (  # noqa: E402
 from finplanner.allocate import AllocationRow  # noqa: E402
 from finplanner.config import PlannerConfig  # noqa: E402
 from finplanner.flow import build_flow, to_dot  # noqa: E402
-from finplanner.io import load_config  # noqa: E402
+from finplanner.io import config_from_dict, config_to_json, load_config  # noqa: E402
 from finplanner.loan import amortize, optimal_payment  # noqa: E402
 from finplanner.runway import build_ledger  # noqa: E402
 from finplanner.scenarios import (  # noqa: E402
@@ -61,38 +62,96 @@ def show_trace(tr: Traced) -> None:
         st.code(tr.explain(), language="text")
 
 
+def _load_into_session(loaded: PlannerConfig) -> None:
+    """Push a loaded config into session_state so all sidebar widgets reset to saved values."""
+    sd = loaded.severance.signing_date or date(2026, 7, 1)
+    st.session_state["signing_date"] = sd
+    st.session_state["w2_earned"] = float(loaded.income.w2_earned_ytd_2026)
+    st.session_state["severance"] = float(loaded.severance.total_pretax)
+    st.session_state["freelance_monthly"] = float(loaded.income.freelance_taxable_monthly)
+    st.session_state["under_table_monthly"] = float(loaded.income.freelance_under_table_monthly)
+    st.session_state["rent"] = float(loaded.expenses.rent_monthly)
+    st.session_state["other"] = float(loaded.expenses.other_monthly)
+    st.session_state["bizexp"] = float(loaded.expenses.business_expense_monthly_deductible)
+    st.session_state["starting_cash"] = float(loaded.retirement_and_investing.starting_cash_excl_severance)
+    st.session_state["sep_ira"] = float(loaded.retirement_and_investing.sep_ira_annual_pretax)
+    st.session_state["roth_ira"] = float(loaded.retirement_and_investing.roth_ira_annual_posttax)
+    st.session_state["sstb"] = loaded.retirement_and_investing.business_is_sstb
+    st.session_state["invest_return"] = float(loaded.assumptions.investment_return_annual_percent)
+    st.session_state["runway_months"] = st.session_state.get("runway_months", 12)
+
+
 def sidebar(cfg: PlannerConfig) -> tuple[PlannerConfig, int]:
     st.sidebar.header("Inputs")
+
+    # ── Upload saved config ──────────────────────────────────────────────────
+    uploaded = st.sidebar.file_uploader(
+        "📂 Load saved config", type=["json"], label_visibility="collapsed",
+        help="Upload a previously saved finplanner_config.json to restore your inputs.",
+    )
+    if uploaded is not None:
+        try:
+            raw = json.load(uploaded)
+            _load_into_session(config_from_dict(raw))
+            st.rerun()
+        except Exception as exc:
+            st.sidebar.error(f"Could not load config: {exc}")
+
     cfg.severance.signing_date = st.sidebar.slider(
         "Severance signing date",
         min_value=date(2026, 1, 1), max_value=date(2026, 12, 31),
         value=date(2026, 7, 1), format="YYYY-MM-DD",
+        key="signing_date",
     )
     cfg.income.w2_earned_ytd_2026 = st.sidebar.number_input(
-        "W-2 earned YTD", value=float(cfg.income.w2_earned_ytd_2026), step=1000.0)
+        "W-2 earned YTD", value=float(cfg.income.w2_earned_ytd_2026), step=1000.0,
+        key="w2_earned")
     cfg.severance.total_pretax = st.sidebar.number_input(
-        "Severance (pretax)", value=float(cfg.severance.total_pretax), step=1000.0)
+        "Severance (pretax)", value=float(cfg.severance.total_pretax), step=1000.0,
+        key="severance")
     cfg.income.freelance_taxable_monthly = st.sidebar.number_input(
-        "Freelance taxable / mo", value=float(cfg.income.freelance_taxable_monthly), step=500.0)
+        "Freelance taxable / mo", value=float(cfg.income.freelance_taxable_monthly), step=500.0,
+        key="freelance_monthly")
     cfg.income.freelance_under_table_monthly = st.sidebar.number_input(
-        "Under-the-table / mo (⚠ excluded from tax)", value=float(cfg.income.freelance_under_table_monthly), step=500.0)
+        "Under-the-table / mo (⚠ excluded from tax)", value=float(cfg.income.freelance_under_table_monthly), step=500.0,
+        key="under_table_monthly")
     cfg.expenses.rent_monthly = st.sidebar.number_input(
-        "Rent / mo", value=float(cfg.expenses.rent_monthly), step=100.0)
+        "Rent / mo", value=float(cfg.expenses.rent_monthly), step=100.0,
+        key="rent")
     cfg.expenses.other_monthly = st.sidebar.number_input(
-        "Other / mo", value=float(cfg.expenses.other_monthly), step=100.0)
+        "Other / mo", value=float(cfg.expenses.other_monthly), step=100.0,
+        key="other")
     cfg.expenses.business_expense_monthly_deductible = st.sidebar.number_input(
-        "Business expense / mo (lowers taxable income)", value=float(cfg.expenses.business_expense_monthly_deductible), step=100.0)
+        "Business expense / mo (lowers taxable income)", value=float(cfg.expenses.business_expense_monthly_deductible), step=100.0,
+        key="bizexp")
     cfg.retirement_and_investing.starting_cash_excl_severance = st.sidebar.number_input(
-        "Starting cash (excl. severance)", value=float(cfg.retirement_and_investing.starting_cash_excl_severance), step=1000.0)
+        "Starting cash (excl. severance)", value=float(cfg.retirement_and_investing.starting_cash_excl_severance), step=1000.0,
+        key="starting_cash")
     cfg.retirement_and_investing.sep_ira_annual_pretax = st.sidebar.number_input(
-        "SEP IRA / yr (pretax, needs SE income)", value=float(cfg.retirement_and_investing.sep_ira_annual_pretax), step=500.0)
+        "SEP IRA / yr (pretax, needs SE income)", value=float(cfg.retirement_and_investing.sep_ira_annual_pretax), step=500.0,
+        key="sep_ira")
     cfg.retirement_and_investing.roth_ira_annual_posttax = st.sidebar.number_input(
-        "Roth IRA / yr (post-tax)", value=float(cfg.retirement_and_investing.roth_ira_annual_posttax), step=500.0)
+        "Roth IRA / yr (post-tax)", value=float(cfg.retirement_and_investing.roth_ira_annual_posttax), step=500.0,
+        key="roth_ira")
     cfg.retirement_and_investing.business_is_sstb = st.sidebar.checkbox(
-        "Business is a specified-service trade (SSTB)", value=cfg.retirement_and_investing.business_is_sstb)
+        "Business is a specified-service trade (SSTB)", value=cfg.retirement_and_investing.business_is_sstb,
+        key="sstb")
     cfg.assumptions.investment_return_annual_percent = st.sidebar.slider(
-        "Assumed investment return %", 0.0, 12.0, float(cfg.assumptions.investment_return_annual_percent), 0.5)
-    months = st.sidebar.slider("Runway horizon (months)", 6, 36, 12)
+        "Assumed investment return %", 0.0, 12.0, float(cfg.assumptions.investment_return_annual_percent), 0.5,
+        key="invest_return")
+    months = st.sidebar.slider("Runway horizon (months)", 6, 36, 12, key="runway_months")
+
+    # ── Download current config ──────────────────────────────────────────────
+    st.sidebar.divider()
+    st.sidebar.download_button(
+        "💾 Save config",
+        data=config_to_json(cfg),
+        file_name="finplanner_config.json",
+        mime="application/json",
+        help="Download your current inputs as a JSON file. Upload it next time to restore them.",
+        use_container_width=True,
+    )
+
     return cfg, months
 
 
