@@ -28,7 +28,7 @@ from finplanner.allocate import (  # noqa: E402
 from finplanner.allocate import AllocationRow  # noqa: E402
 from finplanner.config import PlannerConfig  # noqa: E402
 from finplanner.flow import build_flow, to_dot  # noqa: E402
-from finplanner.io import config_from_dict, config_to_json, load_config  # noqa: E402
+from finplanner.io import load_config  # noqa: E402
 from finplanner.loan import amortize, optimal_payment  # noqa: E402
 from finplanner.runway import build_ledger  # noqa: E402
 from finplanner.scenarios import (  # noqa: E402
@@ -40,6 +40,24 @@ from finplanner.summary import build_summary  # noqa: E402
 from finplanner.trace import Traced  # noqa: E402
 
 STATE_PATH = Path(__file__).resolve().parent.parent / "state.json"
+
+
+def _config_from_upload(raw: dict) -> PlannerConfig:
+    """Parse a config dict from an uploaded JSON file (mirrors io._config_from_raw)."""
+    data = {k: v for k, v in raw.items() if not k.startswith("_")}
+    if "_meta" in raw:
+        data["meta"] = raw["_meta"]
+    picks = data.get("institution_picks")
+    if isinstance(picks, dict):
+        data["institution_picks"] = {k: v for k, v in picks.items() if not k.startswith("_")}
+    return PlannerConfig.model_validate(data)
+
+
+def _cfg_to_json(cfg: PlannerConfig) -> str:
+    """Serialize current cfg for download."""
+    out = cfg.model_dump(mode="json", exclude_none=False)
+    out["_meta"] = out.pop("meta", {})
+    return json.dumps(out, indent=2, default=str)
 
 
 @st.cache_data
@@ -92,7 +110,7 @@ def sidebar(cfg: PlannerConfig) -> tuple[PlannerConfig, int]:
     if uploaded is not None:
         try:
             raw = json.load(uploaded)
-            _load_into_session(config_from_dict(raw))
+            _load_into_session(_config_from_upload(raw))
             st.rerun()
         except Exception as exc:
             st.sidebar.error(f"Could not load config: {exc}")
@@ -145,7 +163,7 @@ def sidebar(cfg: PlannerConfig) -> tuple[PlannerConfig, int]:
     st.sidebar.divider()
     st.sidebar.download_button(
         "💾 Save config",
-        data=config_to_json(cfg),
+        data=_cfg_to_json(cfg),
         file_name="finplanner_config.json",
         mime="application/json",
         help="Download your current inputs as a JSON file. Upload it next time to restore them.",
