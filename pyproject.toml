@@ -1,0 +1,25 @@
+[project]
+name = "finplanner"
+version = "0.1.0"
+description = "Traceable personal-finance transition planner (budget / tax / runway / scenarios)"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.6",
+]
+
+[project.optional-dependencies]
+ui = ["streamlit>=1.33"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+finplanner = "finplanner.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["finplanner"]

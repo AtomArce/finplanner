@@ -1,0 +1,102 @@
+{
+  "_comment": "Finance Transition Planner — fill in your numbers in the sidebar. All dollar figures are USD. Monthly fields are per-month; annual fields are per-year unless noted.",
+  "_meta": {
+    "schema_version": 1,
+    "source": "finplanner",
+    "jurisdiction": { "state": "NY", "city": "NYC", "filing_status": "single" },
+    "tax_year": 2026
+  },
+
+  "income": {
+    "w2_earned_ytd_2026": 0,
+    "freelance_taxable_monthly": 0,
+    "freelance_under_table_monthly": 0,
+    "freelance_months_remaining_2026": 6
+  },
+
+  "severance": {
+    "total_pretax": 0,
+    "signing_date": null,
+    "installment_offsets_days": [45, 105, 135],
+    "split": "even_thirds",
+    "tax_treatment": {
+      "installment_1": { "type": "w2_wages", "withheld": true },
+      "installment_2": { "type": "damages_non_wage", "withheld": false, "taxable": true },
+      "installment_3": { "type": "damages_non_wage", "withheld": false, "taxable": true }
+    }
+  },
+
+  "expenses": {
+    "rent_monthly": 0,
+    "other_monthly": 0,
+    "business_expense_monthly_deductible": 0,
+    "business_expense_applies_months": 6
+  },
+
+  "debt": {
+    "student_loan": {
+      "balance": 0,
+      "monthly_payment": 0,
+      "apr_percent": 0,
+      "note": "Enter your loan balance, monthly payment, and APR."
+    }
+  },
+
+  "retirement_and_investing": {
+    "roth_ira_annual_posttax": 0,
+    "sep_ira_annual_pretax": 0,
+    "taxable_brokerage_etf_annual": 0,
+    "starting_cash_excl_severance": 0
+  },
+
+  "assumptions": {
+    "investment_return_annual_percent": 7.0,
+    "emergency_buffer_months": 6,
+    "standard_deduction_2026": 16100,
+    "ny_nyc_deduction_placeholder": 8000,
+    "se_tax_rate": 0.153,
+    "se_taxable_factor": 0.9235,
+    "qbi_rate": 0.20
+  },
+
+  "institution_picks": {
+    "checking": null,
+    "business_checking": null,
+    "hysa": null,
+    "roth_ira": null,
+    "sep_ira": null,
+    "brokerage": null,
+    "credit_card": null,
+    "_options_reference": {
+      "hysa": [
+        { "name": "Pibank", "apy": 4.40 },
+        { "name": "Vio Bank", "apy": 4.03 },
+        { "name": "Wealthfront Cash", "apy": 4.00 },
+        { "name": "SoFi", "apy": 3.80 },
+        { "name": "Amex HYSA", "apy": 3.10 }
+      ],
+      "credit_card": [
+        { "name": "Amex Blue Cash", "rewards_pct": 3, "apr": 22, "annual_fee": 0 },
+        { "name": "Citi Double Cash", "rewards_pct": 2, "apr": 23, "annual_fee": 0 },
+        { "name": "Chase Sapphire", "rewards_pct": 2, "apr": 24, "annual_fee": 95 },
+        { "name": "Capital One Savor", "rewards_pct": 3, "apr": 24, "annual_fee": 0 }
+      ],
+      "_rates_as_of": "2026-05",
+      "_rates_note": "HYSA APYs and card terms move with the Fed; re-verify before relying on them."
+    }
+  },
+
+  "checklist_tasks": [
+    "Open new checking account",
+    "Decide on bank (consider business account)",
+    "Open HYSA for emergency liquid funds",
+    "Apply for LLC",
+    "Research need for a CPA",
+    "Research home-office tax deduction",
+    "Check in with all student loan providers",
+    "Create loan payment plan",
+    "Open Roth IRA",
+    "Open SEP / solo-401k",
+    "Open / fund taxable ETF account"
+  ]
+}
