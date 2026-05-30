@@ -74,10 +74,32 @@ def md_safe(text: str) -> str:
     return text.replace("$", "\\$")
 
 
+def _render_trace_body(tr: Traced, depth: int = 0) -> None:
+    """Readable trace: formula, formula-with-numbers, an inputs table, the note, then children."""
+    from finplanner.trace import _substitute
+
+    if tr.formula and tr.formula != "0":
+        st.markdown(md_safe(f"**Formula:** `{tr.label}` = {tr.formula}"))
+        substituted = _substitute(tr.formula, tr.inputs)
+        if substituted != tr.formula:
+            st.markdown(md_safe(f"**With your numbers:** = {substituted} → **{tr.value:,.2f}**"))
+    if tr.inputs:
+        idf = pd.DataFrame(
+            [{"input": k, "value": f"{v:,.2f}"} for k, v in tr.inputs.items()]
+        )
+        st.table(idf)
+    if tr.note:
+        flag = "⚠ " if tr.method == "approximation" else ""
+        st.caption(md_safe(f"{flag}{tr.note}"))
+    for child in tr.children:
+        st.markdown(md_safe(f"**↳ {child.label}: {child.value:,.2f}**"))
+        _render_trace_body(child, depth + 1)
+
+
 def show_trace(tr: Traced) -> None:
     flag = " ⚠ approximation" if tr.method == "approximation" else ""
     with st.expander(f"{tr.label}: {tr.value:,.2f}{flag}"):
-        st.code(tr.explain(), language="text")
+        _render_trace_body(tr)
 
 
 def _load_into_session(loaded: PlannerConfig) -> None:
@@ -173,24 +195,45 @@ def sidebar(cfg: PlannerConfig) -> tuple[PlannerConfig, int]:
     return cfg, months
 
 
+def metric_with_trace(col, s, label: str, value_str: str, trace_key: str) -> None:
+    """Render a metric and, directly beneath it, the 'where this comes from' trace expander."""
+    col.metric(label, value_str)
+    tr = s.traces.get(trace_key)
+    if tr is not None:
+        with col:
+            show_trace(tr)
+
+
 def view_summary(s) -> None:
     st.subheader("Consolidated Summary")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Monthly expenses", money(s.total_monthly_expenses))
-    c2.metric("Taxable income 2026", money(s.total_taxable_income_2026))
-    c3.metric(f"Total tax due {s.tax_due_date}", money(s.total_tax_due))
-    c1.metric("Set-aside ⚠ approx", money(s.set_aside))
-    c2.metric("Ending cash", money(s.ending_cash_balance))
-    runout = "Doesn't run out" if s.cash_runs_out_month is None else f"Month {s.cash_runs_out_month}"
-    c3.metric("Cash runs out", runout)
-    c1.metric("SEP contribution", money(s.sep_contribution))
-    c2.metric("Roth contribution", money(s.roth_contribution))
-    c3.metric("HYSA APY", f"{s.hysa_apy * 100:.2f}%")
+    st.caption("Each number shows **where it comes from** — expand the panel beneath it for the "
+               "formula, your inputs, and any approximation notes.")
 
-    st.markdown("#### Show calculations")
-    st.caption("Expand any value to see its formula, inputs, and approximation notes.")
-    for tr in s.traces.values():
-        show_trace(tr)
+    # Refund vs. balance-due headline (the honest reframing of "tax due").
+    bal = s.balance_due_or_refund
+    if bal < 0:
+        st.success(md_safe(f"Estimated **refund ≈ {money(-bal)}** at filing "
+                           f"(severance withheld ≈ {money(s.severance_withheld)} vs. total tax "
+                           f"{money(s.total_tax_due)})."))
+    else:
+        st.info(md_safe(f"Estimated **balance due ≈ {money(bal)}** at filing "
+                        f"(total tax {money(s.total_tax_due)} − severance withheld "
+                        f"{money(s.severance_withheld)}). Regular W-2 withholding not modeled."))
+
+    c1, c2, c3 = st.columns(3)
+    metric_with_trace(c1, s, "Monthly expenses", money(s.total_monthly_expenses), "monthly_expenses")
+    metric_with_trace(c2, s, "Taxable income 2026", money(s.total_taxable_income_2026), "taxable_income_2026")
+    metric_with_trace(c3, s, f"Total tax due {s.tax_due_date}", money(s.total_tax_due), "total_tax")
+    metric_with_trace(c1, s, "NYC UBT", money(s.ubt), "ubt")
+    metric_with_trace(c2, s, "Balance due / refund", money(s.balance_due_or_refund), "balance_due_or_refund")
+    metric_with_trace(c3, s, "Set-aside ⚠ approx", money(s.set_aside), "set_aside")
+    metric_with_trace(c1, s, "SEP contribution", money(s.sep_contribution), "sep_contribution")
+    metric_with_trace(c2, s, "Roth contribution", money(s.roth_contribution), "roth_contribution")
+    metric_with_trace(c3, s, "ETF contribution", money(s.etf_contribution), "etf_contribution")
+    metric_with_trace(c1, s, "Ending cash", money(s.ending_cash_balance), "ending_cash")
+    runout = "Doesn't run out" if s.cash_runs_out_month is None else f"Month {s.cash_runs_out_month}"
+    metric_with_trace(c2, s, "Cash runs out", runout, "cash_runs_out")
+    metric_with_trace(c3, s, "HYSA APY", f"{s.hysa_apy * 100:.2f}%", "hysa")
 
     if s.warnings:
         st.markdown("#### Eligibility warnings")
@@ -208,6 +251,26 @@ def view_tax(s) -> None:
         "We optimize for **maximum take-home cash**, not a \\$0 tax bill. "
         "Expand any line to see the formula, inputs, and approximation notes."
     )
+
+    with st.expander("⚠ Assumptions & approximations (read me)", expanded=False):
+        st.markdown(md_safe(
+            "- **\"Total tax due\" is the full liability on this income, not the balance after "
+            "withholding.** The separate *balance due / refund* line subtracts severance "
+            "withholding; your regular W-2-job withholding is **not** modeled, so your real "
+            "balance due is lower.\n"
+            "- **Severance** is modeled as **1/3 W-2 wages** (FICA + supplemental withholding) + "
+            "**2/3 non-wage damages** (no withholding), per the documented agreement. Change this "
+            "in code if your split differs.\n"
+            "- **QBI** above ~$191,950 taxable income assumes **$0 W-2 wages paid by your business** "
+            "(sole proprietor / no employees), so the deduction is wage-limited and phases to $0.\n"
+            "- **NYC UBT** is a flat 4% on LLC net profit; the **resident credit** (offsets 23–100%) "
+            "and the **NYC-202 loss-year NOL carryforward** are not modeled — real UBT is likely lower.\n"
+            "- **Business losses** offset ordinary income (NY/NYC follow federal AGI), capped by the "
+            "**§461(l)** excess-business-loss limit ($256,000 single, 2026).\n"
+            "- **NY/NYC** start from federal AGI; NY-specific additions/subtractions and NYC credits "
+            "are not modeled. The $200k NIIT / additional-Medicare thresholds are statutory (not indexed)."
+        ))
+
     for tr in s.tax.all_traced():
         show_trace(tr)
 
@@ -280,11 +343,42 @@ def view_flow(cfg: PlannerConfig, s) -> None:
                    "legal/IRS risk, modeled as entered — not endorsed.")
 
 
+def _alloc_column_config(plan):
+    """Read-only month/surplus; editable, formatted, capped bucket columns with help text."""
+    help_text = {
+        "tax_set_aside": "Cash kept for the 2027 tax bill (NOT invested, not a runway drawdown).",
+        "emergency_buffer": "Cash kept as your emergency buffer (not invested).",
+        "sep_ira": f"Pre-tax retirement. Annual cap ≈ {money(plan.caps['sep_ira'])} (≈20% of net SE).",
+        "roth_ira": f"Post-tax retirement. Annual cap ≈ {money(plan.caps['roth_ira'])} after MAGI phase-out.",
+        "etf": "Taxable brokerage investing (post-tax).",
+        "extra_loan": "Extra student-loan principal paydown.",
+    }
+    cfg_cols = {
+        "month": st.column_config.TextColumn("month", disabled=True),
+        "surplus": st.column_config.NumberColumn("surplus", disabled=True, format="$%d"),
+    }
+    for b in ALL_BUCKETS:
+        cfg_cols[b] = st.column_config.NumberColumn(
+            b.replace("_", " ").title(), min_value=0, format="$%d", help=help_text.get(b, ""),
+        )
+    return cfg_cols
+
+
 def view_allocation(cfg: PlannerConfig, s, months: int) -> None:
     st.subheader("Monthly Fund Distribution")
     st.caption("Auto-suggested split of each month's surplus (priority: tax set-aside → emergency "
-               "buffer → SEP → Roth → ETF/extra loan). Edit any cell to override.")
-    remainder_to = st.radio("Send leftover surplus to:", ["etf", "extra_loan", "split"], horizontal=True)
+               "buffer → SEP → Roth → ETF/extra loan). Edit any cell to override; month & surplus "
+               "are read-only.")
+
+    top = st.columns([3, 1])
+    with top[0]:
+        remainder_to = st.radio("Send leftover surplus to:", ["etf", "extra_loan", "split"],
+                                horizontal=True, key="alloc_remainder")
+    with top[1]:
+        if st.button("↺ Reset to suggestion", use_container_width=True):
+            st.session_state.pop("alloc_editor", None)
+            st.rerun()
+
     plan = suggest_allocation(cfg, s, remainder_to=remainder_to)
     for n in plan.notes:
         st.info(md_safe(n))
@@ -293,9 +387,11 @@ def view_allocation(cfg: PlannerConfig, s, months: int) -> None:
         {"month": r.label, "surplus": round(r.surplus), **{b: round(r.buckets.get(b, 0.0)) for b in ALL_BUCKETS}}
         for r in plan.rows
     ])
-    edited = st.data_editor(base, width="stretch", hide_index=True, key="alloc_editor")
+    edited = st.data_editor(
+        base, width="stretch", hide_index=True, key="alloc_editor",
+        column_config=_alloc_column_config(plan),
+    )
 
-    # Rebuild allocation rows from (possibly edited) table -> contributions -> runway impact.
     edited_rows = [
         AllocationRow(
             month_index=i, label=row["month"], surplus=row["surplus"],
@@ -303,22 +399,62 @@ def view_allocation(cfg: PlannerConfig, s, months: int) -> None:
         )
         for i, row in edited.iterrows()
     ]
-    contribs = contributions_from_schedule(edited_rows)
-    led_with = build_ledger(cfg, months=months, start_date=cfg.severance.signing_date,
-                            monthly_contributions=contribs)
+    totals = {b: sum(r.buckets.get(b, 0.0) for r in edited_rows) for b in ALL_BUCKETS}
+
+    # ── Validation: per-bucket caps + per-month surplus overflow ──────────────
+    if totals["sep_ira"] > plan.caps["sep_ira"] + 1:
+        st.error(md_safe(f"SEP IRA total {money(totals['sep_ira'])} exceeds the annual cap "
+                         f"{money(plan.caps['sep_ira'])}."))
+    if totals["roth_ira"] > plan.caps["roth_ira"] + 1:
+        st.error(md_safe(f"Roth IRA total {money(totals['roth_ira'])} exceeds the annual cap "
+                         f"{money(plan.caps['roth_ira'])}."))
+    over_months = [r.label for r in edited_rows if sum(r.buckets.values()) > r.surplus + 0.5]
+    if over_months:
+        st.warning(md_safe(f"These months allocate more than their surplus: {', '.join(over_months)}. "
+                           "You'd be drawing down existing cash in those months."))
+
+    # ── Cap usage ─────────────────────────────────────────────────────────────
+    st.markdown("#### Contribution caps")
+    cc1, cc2 = st.columns(2)
+    sep_pct = (totals["sep_ira"] / plan.caps["sep_ira"] * 100) if plan.caps["sep_ira"] > 0 else 0
+    roth_pct = (totals["roth_ira"] / plan.caps["roth_ira"] * 100) if plan.caps["roth_ira"] > 0 else 0
+    cc1.metric("SEP IRA used", f"{money(totals['sep_ira'])} / {money(plan.caps['sep_ira'])}",
+               delta=f"{sep_pct:.0f}% of cap", delta_color="off")
+    cc2.metric("Roth IRA used", f"{money(totals['roth_ira'])} / {money(plan.caps['roth_ira'])}",
+               delta=f"{roth_pct:.0f}% of cap", delta_color="off")
 
     st.markdown("#### Annual totals (edited)")
-    totals = {b: sum(r.buckets.get(b, 0.0) for r in edited_rows) for b in ALL_BUCKETS}
     cols = st.columns(len(ALL_BUCKETS))
     for col, b in zip(cols, ALL_BUCKETS):
         col.metric(b.replace("_", " ").title(), money(totals[b]))
 
+    # ── SEP → tax feedback: recompute the bill with the chosen SEP/Roth ──────
+    cfg2 = cfg.model_copy(deep=True)
+    cfg2.retirement_and_investing.sep_ira_annual_pretax = totals["sep_ira"]
+    cfg2.retirement_and_investing.roth_ira_annual_posttax = totals["roth_ira"]
+    s2 = build_summary(cfg2, months=months, start_date=cfg.severance.signing_date or date.today())
+
+    st.markdown("#### Tax impact of these contributions")
+    st.caption("SEP IRA is pre-tax, so a higher SEP lowers your tax bill and set-aside. "
+               "Roth is post-tax and doesn't change your tax.")
+    t1, t2, t3 = st.columns(3)
+    t1.metric("Total tax due", money(s2.total_tax_due),
+              delta=money(s2.total_tax_due - s.total_tax_due), delta_color="inverse")
+    t2.metric("Balance due / refund", money(s2.balance_due_or_refund),
+              delta=money(s2.balance_due_or_refund - s.balance_due_or_refund), delta_color="inverse")
+    t3.metric("Set-aside ⚠ approx", money(s2.set_aside),
+              delta=money(s2.set_aside - s.set_aside), delta_color="inverse")
+
+    # ── Runway impact: contributions are cash outflows ────────────────────────
+    contribs = contributions_from_schedule(edited_rows)
+    led_with = build_ledger(cfg2, months=months, start_date=cfg.severance.signing_date,
+                            monthly_contributions=contribs)
     st.markdown("#### Runway impact of these contributions")
-    c1, c2 = st.columns(2)
-    c1.metric("Ending cash (with contributions)", money(led_with.ending_balance),
+    r1, r2 = st.columns(2)
+    r1.metric("Ending cash (with contributions)", money(led_with.ending_balance),
               delta=money(led_with.ending_balance - s.ending_cash_balance))
     runout = "Doesn't run out" if led_with.cash_runs_out_month is None else f"Month {led_with.cash_runs_out_month}"
-    c2.metric("Cash runs out (with contributions)", runout)
+    r2.metric("Cash runs out (with contributions)", runout)
     idf = pd.DataFrame([{"month": r.label, "balance": round(r.balance)} for r in led_with.rows])
     st.line_chart(idf, x="month", y="balance")
 

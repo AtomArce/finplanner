@@ -53,6 +53,18 @@ class YearRates:
     niit_rate: float  # 3.8%
     niit_threshold_single: float  # $200,000
 
+    # Excess Business Loss limit (IRC §461(l)) — OBBBA made permanent, indexing rolled back.
+    ebl_cap_single: float  # $256,000 (2026 single); loss above this carries forward as NOL.
+
+    # NYC Unincorporated Business Tax (UBT) — 4% on unincorporated business net income.
+    ubt_rate: float  # 4%
+    ubt_small_business_gross_threshold: float  # <$95k gross qualifies for the small-business credit (flag only).
+
+    # Supplemental (flat) withholding rates on severance/bonus lump sums — 2026.
+    fed_supplemental_rate: float  # 22% federal (under $1M).
+    ny_supplemental_rate: float  # 9.62% NY State.
+    nyc_supplemental_rate: float  # 4.25% NYC.
+
     # QBI (§199A) — OBBBA 2026, verified 2026-05-28.
     qbi_rate: float  # 20%
     qbi_threshold_single: float  # $191,950 full deduction below this (SSTB).
@@ -94,6 +106,17 @@ RATES_2026 = YearRates(
     addl_medicare_threshold_single=200_000,
     niit_rate=0.038,
     niit_threshold_single=200_000,
+    # IRC §461(l) excess-business-loss cap — $256,000 single (2026, OBBBA), verified 2026-05-30
+    # (Tax Notes reference table; OBBBA rolled the inflation indexing back from 2025's $313,000).
+    ebl_cap_single=256_000,
+    # NYC UBT 4% on unincorporated business net income — verified 2026-05-30 (NYC Dept of Finance).
+    ubt_rate=0.04,
+    ubt_small_business_gross_threshold=95_000,
+    # Flat supplemental withholding rates, verified 2026-05-30 (NYS-50-T-NYS 1/26; PaycheckCity 2026):
+    # federal 22% (<$1M), NY State 9.62%, NYC 4.25%.
+    fed_supplemental_rate=0.22,
+    ny_supplemental_rate=0.0962,
+    nyc_supplemental_rate=0.0425,
     qbi_rate=0.20,
     qbi_threshold_single=191_950,
     qbi_phaseout_width_single=75_000,

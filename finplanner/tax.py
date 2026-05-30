@@ -35,9 +35,14 @@ class TaxInputs:
         return self.severance_wages + self.severance_damages
 
     @property
+    def business_net(self) -> float:
+        """Signed Schedule C result: gross freelance minus business expense (can be negative = loss)."""
+        return self.freelance_taxable_annual - self.bizexp_annual
+
+    @property
     def se_net(self) -> float:
-        """Net self-employment profit (Schedule C): gross freelance minus business expense."""
-        return max(0.0, self.freelance_taxable_annual - self.bizexp_annual)
+        """Net self-employment PROFIT for SE tax / QBI / SEP (a loss floors at $0)."""
+        return max(0.0, self.business_net)
 
 
 @dataclass
@@ -52,13 +57,17 @@ class TaxResult:
     niit: Traced
     ny_tax: Traced
     nyc_tax: Traced
+    ubt: Traced
     total_tax: Traced
+    severance_withheld: Traced
+    balance_due_or_refund: Traced
 
     def all_traced(self) -> list[Traced]:
         return [
             self.se_tax, self.half_se, self.agi, self.qbi_deduction,
             self.federal_taxable_income, self.federal_income_tax,
-            self.addl_medicare, self.niit, self.ny_tax, self.nyc_tax, self.total_tax,
+            self.addl_medicare, self.niit, self.ny_tax, self.nyc_tax, self.ubt,
+            self.total_tax, self.severance_withheld, self.balance_due_or_refund,
         ]
 
     def explain(self) -> str:
@@ -103,21 +112,9 @@ def _qbi(inp: TaxInputs, pre_qbi_ti: float, r: YearRates) -> Traced:
     width = r.qbi_phaseout_width_single
 
     if inp.se_net <= 0:
-        return Traced(0.0, "QBI deduction", "0", {}, note="no qualified business income")
+        return Traced(0.0, "QBI deduction", "0", {}, note="no qualified business income (no SE profit)")
 
-    if not inp.business_is_sstb:
-        # Non-SSTB above the threshold is limited by W-2 wages/UBIA, which we don't model.
-        return Traced(
-            value=base,
-            label="QBI deduction",
-            formula="min(qbi_rate * se_net, qbi_rate * pre_qbi_ti)",
-            inputs={"qbi_rate": r.qbi_rate, "se_net": inp.se_net, "pre_qbi_ti": pre_qbi_ti},
-            method="approximation" if pre_qbi_ti > threshold else "exact",
-            note=("non-SSTB above threshold: W-2 wage/UBIA limit not modeled, full 20% assumed"
-                  if pre_qbi_ti > threshold else ""),
-        )
-
-    # SSTB: full below threshold, linear phase-out across the band, zero above.
+    # Below the threshold: full 20% for both SSTB and non-SSTB.
     if pre_qbi_ti <= threshold:
         return Traced(
             value=base,
@@ -125,13 +122,21 @@ def _qbi(inp: TaxInputs, pre_qbi_ti: float, r: YearRates) -> Traced:
             formula="min(qbi_rate * se_net, qbi_rate * pre_qbi_ti)",
             inputs={"qbi_rate": r.qbi_rate, "se_net": inp.se_net, "pre_qbi_ti": pre_qbi_ti},
         )
+
+    # Above the threshold, BOTH paths phase out to $0 across the band for this filer:
+    #   - SSTB: statutory phase-out of the deduction itself.
+    #   - non-SSTB: the W-2-wage/UBIA limit. We assume $0 W-2 wages paid by the business
+    #     (sole proprietor / single-member LLC, no employees), so the limit is ~$0 and the
+    #     deduction phases out on the same linear band.
+    reason = "SSTB" if inp.business_is_sstb else "non-SSTB W-2 wage/UBIA limit (assumes $0 wages paid)"
     if pre_qbi_ti >= threshold + width:
         return Traced(
             value=0.0,
             label="QBI deduction",
             formula="0",
             inputs={},
-            note=f"SSTB fully phased out above taxable income {threshold + width:,.0f}",
+            method="approximation",
+            note=f"{reason}: fully phased out above taxable income {threshold + width:,.0f}",
         )
     allowed = 1.0 - (pre_qbi_ti - threshold) / width
     return Traced(
@@ -139,7 +144,8 @@ def _qbi(inp: TaxInputs, pre_qbi_ti: float, r: YearRates) -> Traced:
         label="QBI deduction",
         formula="base * (1 - (pre_qbi_ti - threshold) / width)",
         inputs={"base": base, "pre_qbi_ti": pre_qbi_ti, "threshold": threshold, "width": width},
-        note="SSTB partial phase-out",
+        method="approximation",
+        note=f"{reason}: partial phase-out across the {width:,.0f} band",
     )
 
 
@@ -154,17 +160,31 @@ def compute_tax(inp: TaxInputs, r: YearRates) -> TaxResult:
     )
 
     ordinary = inp.w2_wages + inp.severance_total
-    agi_val = ordinary + inp.se_net + inp.taxable_interest - half_se.value - inp.sep_contrib
+    # A business LOSS reduces AGI (offsets W-2/severance), but only up to the §461(l) cap;
+    # any excess loss is carried forward as an NOL (not modeled here). A profit flows in full.
+    business_for_agi = max(inp.business_net, -r.ebl_cap_single)
+    loss_capped = inp.business_net < -r.ebl_cap_single
+    agi_val = ordinary + business_for_agi + inp.taxable_interest - half_se.value - inp.sep_contrib
+    agi_note = (
+        "Severance modeled as 1/3 W-2 wages + 2/3 non-wage damages per the agreement. "
+        "Roth contributions are post-tax and are NOT subtracted. "
+        "A business loss offsets ordinary income (NY/NYC follow federal AGI)."
+    )
+    if loss_capped:
+        agi_note += (f" Business loss exceeds the §461(l) cap ({r.ebl_cap_single:,.0f}); "
+                     f"only that much offsets this year, the rest carries forward.")
     agi = Traced(
         value=agi_val,
         label="Adjusted gross income",
-        formula="w2 + severance_total + se_net + taxable_interest - half_se - sep_contrib",
+        formula="w2 + severance_total + business_for_agi + taxable_interest - half_se - sep_contrib",
         inputs={
-            "w2": inp.w2_wages, "severance_total": inp.severance_total, "se_net": inp.se_net,
+            "w2": inp.w2_wages, "severance_total": inp.severance_total,
+            "business_for_agi": business_for_agi,
             "taxable_interest": inp.taxable_interest, "half_se": half_se.value,
             "sep_contrib": inp.sep_contrib,
         },
-        note="Roth contributions are post-tax and are NOT subtracted",
+        method="approximation" if loss_capped else "exact",
+        note=agi_note,
     )
 
     pre_qbi_ti = max(0.0, agi_val - r.federal_std_deduction_single)
@@ -231,20 +251,60 @@ def compute_tax(inp: TaxInputs, r: YearRates) -> TaxResult:
         note="NYC resident brackets on NY taxable income; NYC credits not modeled",
     )
 
-    total_val = (fed_tax_val + se.value + ny_tax_val + nyc_tax_val + addl_med_val + niit_val)
+    # NYC Unincorporated Business Tax — 4% on LLC net profit; $0 in a loss year.
+    ubt_val = r.ubt_rate * inp.se_net  # se_net already floors a loss at 0
+    ubt = Traced(
+        value=ubt_val,
+        label="NYC Unincorporated Business Tax (UBT)",
+        formula="ubt_rate * max(0, business_net)",
+        inputs={"ubt_rate": r.ubt_rate, "business_net": inp.business_net},
+        method="approximation",
+        note=("4% on LLC net profit; $0 in a loss year. The NYC resident credit (offsets ~23–100%) "
+              "and the NYC-202 loss-year NOL carryforward are NOT modeled — your real UBT is likely lower."),
+    )
+
+    total_val = (fed_tax_val + se.value + ny_tax_val + nyc_tax_val + addl_med_val + niit_val + ubt_val)
     total = Traced(
         value=total_val,
-        label="Total tax (fed + SE + NY + NYC + addl Medicare + NIIT)",
-        formula="fed_tax + se_tax + ny_tax + nyc_tax + addl_medicare + niit",
+        label="Total tax (fed + SE + NY + NYC + addl Medicare + NIIT + UBT)",
+        formula="fed_tax + se_tax + ny_tax + nyc_tax + addl_medicare + niit + ubt",
         inputs={
             "fed_tax": fed_tax_val, "se_tax": se.value, "ny_tax": ny_tax_val,
-            "nyc_tax": nyc_tax_val, "addl_medicare": addl_med_val, "niit": niit_val,
+            "nyc_tax": nyc_tax_val, "addl_medicare": addl_med_val, "niit": niit_val, "ubt": ubt_val,
         },
+        note="Full liability on this income — NOT the balance due after withholding (see below).",
+    )
+
+    # Severance supplemental withholding (lump-sum flat rates) — only the W-2-wage installment is
+    # withheld; the non-wage damages installments are not. Regular W-2-job withholding NOT modeled.
+    supp_rate = r.fed_supplemental_rate + r.ny_supplemental_rate + r.nyc_supplemental_rate
+    withheld_val = inp.severance_wages * supp_rate
+    severance_withheld = Traced(
+        value=withheld_val,
+        label="Severance withholding (already paid)",
+        formula="severance_wages * (fed_supp + ny_supp + nyc_supp)",
+        inputs={"severance_wages": inp.severance_wages, "fed_supp": r.fed_supplemental_rate,
+                "ny_supp": r.ny_supplemental_rate, "nyc_supp": r.nyc_supplemental_rate},
+        method="approximation",
+        note=(f"Flat supplemental withholding (~{supp_rate*100:.1f}%) on the W-2-wage severance "
+              "installment only. Regular W-2-job withholding is NOT modeled, so real withholding "
+              "is higher and your balance due is lower than shown."),
+    )
+    balance_val = total_val - withheld_val
+    balance_due_or_refund = Traced(
+        value=balance_val,
+        label="Estimated balance due at filing (negative = refund)",
+        formula="total_tax - severance_withheld",
+        inputs={"total_tax": total_val, "severance_withheld": withheld_val},
+        method="approximation",
+        note=("Positive = you owe at filing; negative = refund. Business losses lower total tax, "
+              "which is how over-withheld severance comes back as a refund."),
     )
 
     return TaxResult(
         se_tax=se, half_se=half_se, agi=agi, qbi_deduction=qbi,
         federal_taxable_income=fed_ti, federal_income_tax=fed_tax,
-        addl_medicare=addl_medicare, niit=niit, ny_tax=ny_tax, nyc_tax=nyc_tax,
-        total_tax=total,
+        addl_medicare=addl_medicare, niit=niit, ny_tax=ny_tax, nyc_tax=nyc_tax, ubt=ubt,
+        total_tax=total, severance_withheld=severance_withheld,
+        balance_due_or_refund=balance_due_or_refund,
     )

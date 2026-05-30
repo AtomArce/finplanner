@@ -27,7 +27,12 @@ def cmd_summary(args) -> None:
     print(f"Total monthly expenses:   {_money(s.total_monthly_expenses)}")
     print(f"Annual expenses:          {_money(s.annual_expenses)}")
     print(f"Taxable income 2026:      {_money(s.total_taxable_income_2026)}")
-    print(f"Total tax due {s.tax_due_date}: {_money(s.total_tax_due)}")
+    print(f"Total tax due {s.tax_due_date}: {_money(s.total_tax_due)}  (full liability, pre-withholding)")
+    print(f"  incl. NYC UBT:          {_money(s.ubt)}")
+    print(f"Severance withheld:       {_money(s.severance_withheld)}")
+    bal = s.balance_due_or_refund
+    label = "Balance due at filing" if bal >= 0 else "Estimated REFUND"
+    print(f"{label+':':<26}{_money(abs(bal))}")
     print(f"Recommended set-aside:    {_money(s.set_aside)}  (approximation)")
     print(f"Roth / SEP / ETF contrib: {_money(s.roth_contribution)} / {_money(s.sep_contribution)} / {_money(s.etf_contribution)}")
     print(f"HYSA APY:                 {s.hysa_apy * 100:.2f}%")

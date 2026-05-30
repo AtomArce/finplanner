@@ -48,6 +48,9 @@ class Summary:
     etf_contribution: float
     total_taxable_income_2026: float
     total_tax_due: float
+    ubt: float
+    severance_withheld: float
+    balance_due_or_refund: float
     set_aside: float
     cash_runs_out_month: int | None
     ending_cash_balance: float
@@ -73,9 +76,11 @@ def build_summary(cfg: PlannerConfig, months: int = 12, start_date: date | None 
         + cfg.card_annual_fee / 12.0
     )
 
-    # taxable income 2026 = ordinary + se_net + taxable interest (under-the-table EXCLUDED)
+    # taxable income 2026 = ordinary + business result + taxable interest (under-the-table EXCLUDED).
+    # A business loss reduces this (capped by §461(l)), consistent with AGI.
+    business_for_income = max(inp.business_net, -r.ebl_cap_single)
     taxable_income = (
-        inp.w2_wages + inp.severance_total + inp.se_net + inp.taxable_interest
+        inp.w2_wages + inp.severance_total + business_for_income + inp.taxable_interest
     )
 
     traces: dict[str, Traced] = {
@@ -93,15 +98,57 @@ def build_summary(cfg: PlannerConfig, months: int = 12, start_date: date | None 
         "taxable_income_2026": Traced(
             value=taxable_income,
             label="Taxable income 2026",
-            formula="w2 + severance_total + se_net + taxable_interest",
+            formula="w2 + severance_total + business_net + taxable_interest",
             inputs={
                 "w2": inp.w2_wages, "severance_total": inp.severance_total,
-                "se_net": inp.se_net, "taxable_interest": inp.taxable_interest,
+                "business_net": business_for_income, "taxable_interest": inp.taxable_interest,
             },
-            note="under-the-table income is excluded from taxable income",
+            note=("Under-the-table income is excluded. Severance modeled as 1/3 W-2 wages + "
+                  "2/3 non-wage damages per the agreement. A business loss reduces this via AGI."),
         ),
         "total_tax": tax.total_tax,
+        "ubt": tax.ubt,
+        "balance_due_or_refund": tax.balance_due_or_refund,
+        "severance_withheld": tax.severance_withheld,
         "set_aside": set_aside,
+        "sep_contribution": Traced(
+            value=inp.sep_contrib,
+            label="SEP IRA contribution",
+            formula="sep_ira_annual_pretax",
+            inputs={"sep_ira_annual_pretax": inp.sep_contrib},
+            note="As entered in the sidebar (annual, pre-tax). Lowers AGI; the Allocation tab can drive this.",
+        ),
+        "roth_contribution": Traced(
+            value=inp.roth_contrib,
+            label="Roth IRA contribution",
+            formula="roth_ira_annual_posttax",
+            inputs={"roth_ira_annual_posttax": inp.roth_contrib},
+            note="As entered in the sidebar (annual, post-tax). Does not change your tax.",
+        ),
+        "etf_contribution": Traced(
+            value=cfg.retirement_and_investing.taxable_brokerage_etf_annual,
+            label="Taxable ETF contribution",
+            formula="taxable_brokerage_etf_annual",
+            inputs={"taxable_brokerage_etf_annual": cfg.retirement_and_investing.taxable_brokerage_etf_annual},
+            note="As entered in the sidebar (annual). Post-tax brokerage investing.",
+        ),
+        "hysa": Traced(
+            value=ledger.taxable_interest_annual,
+            label="HYSA interest (modeled)",
+            formula="apy * average cash balance over the runway (compounded monthly)",
+            inputs={"apy": cfg.hysa_apy, "ending_balance": ledger.ending_balance},
+            method="approximation",
+            note="Interest accrues on the modeled cash balance each month — see the Runway tab.",
+        ),
+        "cash_runs_out": Traced(
+            value=float(ledger.cash_runs_out_month if ledger.cash_runs_out_month is not None else -1),
+            label="Cash runs out (month index)",
+            formula="first month index where the running cash balance goes negative",
+            inputs={"starting_cash": ledger.starting_balance},
+            method="approximation",
+            note=("-1 means cash does not run out within the horizon. "
+                  "See the Runway tab for the month-by-month balance."),
+        ),
         "ending_cash": Traced(
             value=ledger.ending_balance,
             label="Ending cash balance",
@@ -133,6 +180,9 @@ def build_summary(cfg: PlannerConfig, months: int = 12, start_date: date | None 
         etf_contribution=cfg.retirement_and_investing.taxable_brokerage_etf_annual,
         total_taxable_income_2026=taxable_income,
         total_tax_due=tax.total_tax.value,
+        ubt=tax.ubt.value,
+        severance_withheld=tax.severance_withheld.value,
+        balance_due_or_refund=tax.balance_due_or_refund.value,
         set_aside=set_aside.value,
         cash_runs_out_month=ledger.cash_runs_out_month,
         ending_cash_balance=ledger.ending_balance,

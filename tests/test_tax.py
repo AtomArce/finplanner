@@ -60,7 +60,8 @@ def test_case_c_freelance_and_bizexp():
     approx(t.half_se.value, 3_391.09)
     approx(t.qbi_deduction.value, 9_600.00)  # 20% of se_net, below SSTB threshold
     approx(t.agi.value, 142_483.91)
-    approx(t.total_tax.value, 40_182.25)
+    approx(t.ubt.value, 1_920.00)  # 4% of se_net 48,000
+    approx(t.total_tax.value, 42_102.25)  # was 40,182.25 before UBT line
 
 
 def test_case_d_sep_lowers_income_tax_not_se():
@@ -98,6 +99,8 @@ def test_case_f_high_income_ss_cap_niit_addl_medicare():
     # Medicare = 166230*.029 = 4820.67; SE = 9098.67.
     # addl Medicare: (150000 + 166230 - 200000)*0.009 = 116230*.009 = 1046.07.
     # NIIT: min(30000, AGI-200000)*0.038 = 30000*.038 = 1140.
+    # QBI: pre_qbi_ti = 339,350.67 >= 266,950 (threshold+width) -> wage-limited to 0 (sole prop).
+    # UBT: 4% * 180000 = 7200.
     t = compute_tax(
         TaxInputs(
             w2_wages=150_000, freelance_taxable_annual=200_000, bizexp_annual=20_000,
@@ -108,7 +111,44 @@ def test_case_f_high_income_ss_cap_niit_addl_medicare():
     approx(t.se_tax.value, 9_098.67)  # SS portion capped
     approx(t.addl_medicare.value, 1_046.07)
     approx(t.niit.value, 1_140.00)
-    approx(t.total_tax.value, 121_131.90)
+    approx(t.qbi_deduction.value, 0.0)  # non-SSTB above band, no W-2 wages -> wage-limited to 0
+    approx(t.ubt.value, 7_200.00)
+    approx(t.total_tax.value, 140_931.90)  # was 121,131.90 before QBI wage-limit + UBT
+
+
+def test_case_g_business_loss_offsets_severance():
+    # Loss year: freelance 10k gross, bizexp 40k -> business_net = -30k (loss).
+    # Loss offsets ordinary income: AGI = 25000 + 72875 - 30000 = 67875 (no half_se, no SEP).
+    # SE tax = 0 (loss), UBT = 0 (loss), QBI = 0 (no profit).
+    t = compute_tax(
+        TaxInputs(
+            w2_wages=25_000, severance_wages=SEV_WAGES, severance_damages=SEV_DAMAGES,
+            freelance_taxable_annual=10_000, bizexp_annual=40_000,
+        ),
+        R,
+    )
+    approx(t.se_tax.value, 0.0)
+    approx(t.ubt.value, 0.0)
+    approx(t.qbi_deduction.value, 0.0)
+    approx(t.agi.value, 67_875.00)  # 97_875 ordinary - 30_000 loss
+
+
+def test_case_h_loss_capped_at_461l():
+    # Enormous loss is capped at the §461(l) single limit (256k) for the in-year offset.
+    t = compute_tax(
+        TaxInputs(w2_wages=500_000, freelance_taxable_annual=0, bizexp_annual=900_000), R
+    )
+    # business_net = -900k, but only -256k offsets this year: AGI = 500000 - 256000 = 244000.
+    approx(t.agi.value, 244_000.00)
+
+
+def test_severance_withholding_and_balance():
+    t = compute_tax(
+        TaxInputs(w2_wages=25_000, severance_wages=SEV_WAGES, severance_damages=SEV_DAMAGES), R
+    )
+    supp = R.fed_supplemental_rate + R.ny_supplemental_rate + R.nyc_supplemental_rate
+    approx(t.severance_withheld.value, SEV_WAGES * supp)
+    approx(t.balance_due_or_refund.value, t.total_tax.value - t.severance_withheld.value)
 
 
 def test_qbi_sstb_phaseout_zero_above_band():
